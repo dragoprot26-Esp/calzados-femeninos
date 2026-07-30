@@ -1,0 +1,6 @@
+{
+  "name": "PWA Multi-Inquilino de Calzado Femenino",
+  "description": "Plataforma PWA multi-inquilino para tiendas de zapatos de damas. Con catálogo interactivo, carrusel de fotos por producto, panel de administración, control de colaboradores, pedidos con código de retiro, sugerencias, y personalización estética completa con temas como Nueva York.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
