@@ -41,7 +41,11 @@ export default function App() {
 
   // Interactive panels
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  // Al recargar: si había panel abierto (logueado), reabrimos el panel y no
+  // salimos al público hasta que el dueño toque "Salir".
+  const [isAdminOpen, setIsAdminOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('calf_panel_view') === '1'; } catch (e) { return false; }
+  });
   const [cart, setCart] = useState<{ product: Product; quantity: number }[]>([]);
 
   // Synchronize state changes to localStorage
@@ -141,6 +145,20 @@ export default function App() {
     try { return await biometria.registrar(cloudCodeRef.current, user, role); } catch (e) { return false; }
   };
 
+  // Recordar panel abierto (para no salir al público al recargar).
+  useEffect(() => {
+    try { if (cloudAuthed) localStorage.setItem('calf_panel_view', '1'); } catch (e) { /* noop */ }
+  }, [cloudAuthed]);
+
+  // "Salir": cierra sesión de nube, olvida el panel y vuelve al público.
+  const handleCloudLogout = () => {
+    try { localStorage.removeItem('calf_panel_view'); } catch (e) { /* noop */ }
+    try { cloud.signOut(); } catch (e) { /* noop */ }
+    cloudCodeRef.current = null;
+    setCloudAuthed(false);
+    setIsAdminOpen(false);
+  };
+
   // Arranque: página pública por ?codigo o restaurar sesión admin.
   useEffect(() => {
     (async () => { try { setBioAvail(await biometria.soportada()); } catch (e) { /* noop */ } })();
@@ -163,6 +181,7 @@ export default function App() {
             if (remote) hydrateFromCloud(m.tenant_id, remote as cloud.CloudData);
             cloudCodeRef.current = m.tenant_id;
             setCloudAuthed(true);
+            setIsAdminOpen(true); // recarga logueado → volvemos al panel
           }
         } catch (e) { /* sin sesión válida */ }
       }
@@ -649,6 +668,8 @@ export default function App() {
         cloudBioLogin={cloudBioLogin}
         registrarBio={registrarBio}
         bioAvail={bioAvail}
+        startAuthenticated={cloud.estaLogueado()}
+        onLogout={handleCloudLogout}
       />
 
       {/* Pie de página con botón de Visita Vitrina */}
