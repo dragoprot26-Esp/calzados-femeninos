@@ -99,6 +99,8 @@ interface AdminPanelProps {
   cloudBioLogin?: () => Promise<{ ok: boolean; role?: 'admin' | 'collaborator'; msg?: string }>;
   registrarBio?: (user: string, role: 'admin' | 'collaborator') => Promise<boolean>;
   bioAvail?: boolean;
+  startAuthenticated?: boolean;   // recarga estando logueado → entra directo al panel
+  onLogout?: () => void;          // "Salir": cierra sesión de nube y sale del panel
 }
 
 export default function AdminPanel({
@@ -129,10 +131,12 @@ export default function AdminPanel({
   cloudLogin,
   cloudBioLogin,
   registrarBio,
-  bioAvail = false
+  bioAvail = false,
+  startAuthenticated = false,
+  onLogout
 }: AdminPanelProps) {
   // Auth flow states
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(startAuthenticated);
   const [authRole, setAuthRole] = useState<'admin' | 'collaborator'>('admin');
   const [licenseKey, setLicenseKey] = useState('');
   const [username, setUsername] = useState('');
@@ -430,6 +434,7 @@ export default function AdminPanel({
   };
 
   const handleLogout = () => {
+    if (onLogout) onLogout(); // cierra sesión de nube + limpia el recordatorio
     setIsAuthenticated(false);
     setActiveCollaborator(null);
     setLicenseKey('');
