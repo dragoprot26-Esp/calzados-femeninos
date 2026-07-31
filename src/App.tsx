@@ -150,7 +150,9 @@ export default function App() {
       if (codigo) {
         cloudCodeRef.current = codigo;
         const pub = await cloud.calfPublica(codigo);
-        if (pub) hydrateFromCloud(codigo, pub as cloud.CloudData);
+        // Siempre hidratamos por ?codigo (aunque la nube no devuelva nada): así
+        // mostramos la tienda de esa licencia (limpia si no hay datos), nunca el demo.
+        hydrateFromCloud(codigo, (pub || {}) as cloud.CloudData);
         return;
       }
       if (cloud.estaLogueado()) {
