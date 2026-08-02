@@ -857,8 +857,6 @@ export default function AdminPanel({
                 title="Volver a la tienda sin cerrar sesión"
               >
                 <Eye className="w-4 h-4 text-pink-300" />
-                <span className="hidden sm:inline">Ver Página Pública</span>
-                <span className="sm:hidden">Ver Tienda</span>
               </button>
             )}
 
@@ -3418,7 +3416,7 @@ export default function AdminPanel({
                               }`}
                             >
                               <span className="text-sm">{t.logo || '🌸'}</span>
-                              <span className="whitespace-nowrap tracking-wide">{t.name}</span>
+                              <span className="truncate max-w-[160px] tracking-wide" title={t.name}>{t.name}</span>
                               {isActive && <Check className="w-4 h-4 text-white stroke-[3] ml-0.5" />}
                             </button>
                           );
