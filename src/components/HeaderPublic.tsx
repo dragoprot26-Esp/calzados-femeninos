@@ -120,14 +120,14 @@ export default function HeaderPublic({
 
       {/* 2. CABEZERA CON EL LOGO / IMAGEN DE FONDO / TEXTO */}
       <div
-        className="relative py-20 px-6 text-center bg-cover bg-center transition-all duration-500"
+        className="relative py-10 sm:py-14 md:py-20 px-4 sm:px-6 text-center bg-cover bg-center transition-all duration-500"
         style={{
           backgroundImage: `linear-gradient(to bottom, rgba(0,0,0,0.4), rgba(0,0,0,0.75)), url(${tenant.banner || tenant.theme.bannerUrl})`,
         }}
       >
         <div className="max-w-3xl mx-auto space-y-4 text-white">
           {/* Logo del Inquilino */}
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white/10 backdrop-blur-md border-2 border-white/30 text-4xl shadow-xl animate-bounce overflow-hidden">
+          <div className="inline-flex items-center justify-center w-14 h-14 sm:w-20 sm:h-20 rounded-full bg-white/10 backdrop-blur-md border-2 border-white/30 text-2xl sm:text-4xl shadow-xl animate-bounce overflow-hidden">
             {tenant.logo && (tenant.logo.startsWith('http') || tenant.logo.startsWith('data:image')) ? (
               <img src={tenant.logo} alt={tenant.name} className="w-full h-full object-cover" />
             ) : (
@@ -136,7 +136,7 @@ export default function HeaderPublic({
           </div>
 
           <h1
-            className="text-4xl md:text-5xl font-black tracking-tight"
+            className="text-2xl sm:text-3xl md:text-5xl font-black tracking-tight break-words"
             style={{
               fontFamily: tenant.theme.fontFamily === 'serif' ? 'Georgia, serif' : tenant.theme.fontFamily === 'mono' ? 'monospace' : 'inherit',
               color: 'white' // always white on top of dark banner mask
