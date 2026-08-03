@@ -203,11 +203,24 @@ export default function App() {
         const mergedOrders = unir(tOrders, (remote && remote.orders) || []);
         const mergedComments = unir(tComments, (remote && remote.comments) || []);
         const t = db.tenants.find(x => x.id === code) || db.tenants[0];
+        // CANDADO ANTI-BORRADO: si local NO tiene productos/colaboradores pero la
+        // nube SÍ, no pisamos el catálogo con una lista vacía (evita perder datos
+        // por una recarga/carrera). Recuperamos los de la nube.
+        let productsToSave = db.products.filter(p => p.tenantId === code);
+        let collabsToSave = db.collaborators.filter(c => c.tenantId === code);
+        if (productsToSave.length === 0 && remote && Array.isArray(remote.products) && remote.products.length > 0) {
+          productsToSave = remote.products.map((p: any) => ({ ...p, tenantId: code }));
+          setDb(prev => ({ ...prev, products: [...prev.products.filter(p => p.tenantId !== code), ...productsToSave] }));
+        }
+        if (collabsToSave.length === 0 && remote && Array.isArray((remote as any).collaborators) && (remote as any).collaborators.length > 0) {
+          collabsToSave = (remote as any).collaborators.map((c: any) => ({ ...c, tenantId: code }));
+          setDb(prev => ({ ...prev, collaborators: [...prev.collaborators.filter(c => c.tenantId !== code), ...collabsToSave] }));
+        }
         await cloud.cloudSave(code, {
           tenant: t,
-          products: db.products.filter(p => p.tenantId === code),
+          products: productsToSave,
           orders: mergedOrders,
-          collaborators: db.collaborators.filter(c => c.tenantId === code),
+          collaborators: collabsToSave,
           comments: mergedComments,
           adminSettings: db.adminSettings,
         });
