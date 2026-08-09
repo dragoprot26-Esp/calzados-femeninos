@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import * as cloud from '../services/cloud';
 import {
   Tenant,
   Product,
@@ -159,6 +160,18 @@ export default function AdminPanel({
 
   // Active Admin tab selection
   const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'prendas' | 'otros' | 'orders' | 'collaborators' | 'comments' | 'theme' | 'music' | 'adminSettings'>('dashboard');
+
+  // Suscripción / alquiler: días hasta el vencimiento de la licencia.
+  const [vencAlq, setVencAlq] = useState<string | null>(null);
+  useEffect(() => {
+    let v = true;
+    (async () => {
+      const l = await cloud.validarLicencia(tenant.id || '');
+      if (v && l && l.fecha_vencimiento) setVencAlq(l.fecha_vencimiento);
+    })();
+    return () => { v = false; };
+  }, [tenant.id]);
+  const diasAlq = vencAlq ? Math.ceil((new Date(vencAlq).getTime() - Date.now()) / 86400000) : null;
 
   // Excel / CSV Export local filters
   const [exportFilter, setExportFilter] = useState<'all' | 'weekly' | 'monthly' | 'yearly'>('all');
@@ -4015,6 +4028,29 @@ export default function AdminPanel({
               {/* TAB 7: CONFIGURACIÓN PANEL ADMIN */}
               {activeTab === 'adminSettings' && (
                 <div className="space-y-6 animate-fadeIn text-slate-950">
+                  {/* Mi Suscripción: contador de vencimiento + pagar alquiler */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-black text-slate-900">Mi Suscripción</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Licencia <span className="font-mono font-bold text-rose-600">{tenant.id}</span></p>
+                      </div>
+                      <div className="text-center px-5 py-3 rounded-2xl border border-slate-200">
+                        {diasAlq === null ? (
+                          <span className="text-xs text-slate-400">Consultando…</span>
+                        ) : diasAlq < 0 ? (
+                          <><span className="block text-2xl font-black text-red-500">Vencida</span><span className="text-[11px] text-red-400">Regularizá tu pago</span></>
+                        ) : (
+                          <><span className={`block text-3xl font-black ${diasAlq <= 7 ? 'text-orange-500' : 'text-emerald-600'}`}>{diasAlq}</span><span className="text-[11px] text-slate-500">{diasAlq === 1 ? 'día para vencer' : 'días para vencer'}</span></>
+                        )}
+                      </div>
+                    </div>
+                    {vencAlq && <p className="text-[11px] text-slate-500">Vence el <strong>{new Date(vencAlq).toLocaleDateString('es-AR')}</strong>.</p>}
+                    <a href={`https://cyc-qr-cobros.vercel.app/?codigo=${encodeURIComponent(tenant.id || '')}`} target="_blank" rel="noopener noreferrer" className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl flex items-center justify-center gap-2 transition">
+                      <span>💳</span><span>Pagar mi alquiler</span>
+                    </a>
+                  </div>
+
                   <div>
                     <h3 className="text-xl font-black text-slate-900">Configuración & Copias de Seguridad</h3>
                     <p className="text-xs text-slate-500">Ajuste la comodidad de su espacio administrativo y gestione respaldos de datos.</p>
