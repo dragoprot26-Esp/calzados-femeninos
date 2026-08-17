@@ -44,10 +44,63 @@ async function authPost(path: string, body: any) {
 }
 async function signUp(email: string, password: string): Promise<SbSession | null> { const r = await authPost('/auth/v1/signup', { email, password }); if (r.ok && r.data && r.data.access_token) return guardarSesion(r.data); return null; }
 async function signIn(email: string, password: string): Promise<SbSession | null> { const r = await authPost('/auth/v1/token?grant_type=password', { email, password }); if (r.ok && r.data && r.data.access_token) return guardarSesion(r.data); return null; }
-async function refresh(): Promise<SbSession | null> { const s = sessGet(); if (!s || !s.refresh_token) return null; const r = await authPost('/auth/v1/token?grant_type=refresh_token', { refresh_token: s.refresh_token }); if (r.ok && r.data && r.data.access_token) return guardarSesion(r.data); return null; }
+/**
+ * Renueva la sesion CON CANDADO.
+ *
+ * Supabase cambia el refresh_token cada vez que se usa. Sin candado, dos
+ * renovaciones al mismo tiempo (el sondeo + el guardado, o dos pestanas, o el
+ * navegador y la app instalada) hacian que la segunda llegara con un token ya
+ * gastado: la sesion se moria sola y el panel dejaba de sincronizar sin avisar.
+ */
+let refrescando: Promise<SbSession | null> | null = null;
+const LOCK_KEY = 'calf_sb_refresh';
+async function refresh(): Promise<SbSession | null> {
+  if (refrescando) return refrescando;
+  refrescando = (async () => {
+    const s = sessGet(); if (!s || !s.refresh_token) return null;
+    try {
+      const otra = Number(localStorage.getItem(LOCK_KEY) || 0);
+      if (Date.now() - otra < 4000) {
+        await new Promise((r) => setTimeout(r, 1600));
+        const nueva = sessGet();
+        if (nueva && nueva.refresh_token && nueva.refresh_token !== s.refresh_token) return nueva;
+      }
+      localStorage.setItem(LOCK_KEY, String(Date.now()));
+    } catch (e) { /* modo privado */ }
+    const actual = sessGet();
+    const rt = (actual && actual.refresh_token) || s.refresh_token;
+    const r = await authPost('/auth/v1/token?grant_type=refresh_token', { refresh_token: rt });
+    if (r.ok && r.data && r.data.access_token) return guardarSesion(r.data);
+    return null;
+  })();
+  try { return await refrescando; }
+  finally { setTimeout(() => { refrescando = null; }, 1500); }
+}
+
+/** Renueva la sesion ANTES de que venza. El token dura una hora: sin esto, el
+ *  panel quedaba abierto, se vencia y de golpe dejaba de sincronizar. */
+export async function mantenerSesionViva(): Promise<boolean> {
+  const s = sessGet();
+  if (!s) return false;
+  if (((s.expira || 0) - Date.now()) > 15 * 60 * 1000) return true;
+  return !!(await refresh());
+}
 export async function authToken(): Promise<string | null> { const s = sessGet(); if (!s) return null; if (Date.now() < (s.expira || 0)) return s.access_token; const ns = await refresh(); return ns ? ns.access_token : null; }
 export function signOut() { sessSet(null); }
-export async function signOutGlobal() { try { const tok = await authToken(); if (tok) { await fetch(`${SB_URL}/auth/v1/logout?scope=global`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + tok } }); } } catch (e) { /* noop */ } signOut(); }
+/** Cierra la sesion SOLO en este dispositivo (`scope=local`). Con `global` se
+ *  revocaba en TODOS: salir en la PC le mataba la sesion del celular en
+ *  silencio, y el otro panel dejaba de leer sin avisar. */
+export async function signOutGlobal() {
+  try {
+    const tok = await authToken();
+    if (tok) {
+      await fetch(`${SB_URL}/auth/v1/logout?scope=local`, {
+        method: 'POST', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + tok },
+      });
+    }
+  } catch (e) { /* noop */ }
+  signOut();
+}
 
 async function rpc(fn: string, body: any, conAuth = true): Promise<any> {
   const tok = conAuth ? await authToken() : null;
@@ -81,18 +134,38 @@ export async function asegurarCuentaSeguraDueno(usuario: string, password: strin
 
 export async function asegurarCuentaSeguraColab(usuario: string, password: string, codigo: string) {
   if (!usuario || !password || !codigo) return { ok: false, msg: 'Faltan datos' };
+  // La comprobacion contra el listado del local va SIEMPRE PRIMERO, no solo
+  // cuando falla el inicio de sesion. Antes, a un colaborador dado de baja le
+  // quedaba viva la cuenta y entraba igual: el inicio de sesion funcionaba y
+  // nadie volvia a mirar si seguia en el listado.
+  let habilitado = false;
+  try {
+    const r: any = await rpc('calf_verificar_colab', { p_codigo: codigo, p_usuario: usuario, p_pass: password }, false);
+    habilitado = !!(r === true || (r && r.ok === true));
+  } catch (e) { habilitado = false; }
+  if (!habilitado) {
+    return { ok: false, msg: 'Usuario o contrasena de colaborador incorrectos, o tu acceso fue dado de baja.' };
+  }
+
   const email = emailDe(usuario, codigo);
   let sess = await signIn(email, password);
-  if (!sess) {
-    let ok = false;
-    try { ok = await rpc('calf_verificar_colab', { p_codigo: codigo, p_usuario: usuario, p_pass: password }, false); } catch (e) { ok = false; }
-    if (!ok) return { ok: false, msg: 'Usuario o contrasena de colaborador incorrectos.' };
-    await signUp(email, password); sess = await signIn(email, password);
-  }
-  if (!sess) return { ok: false, msg: 'No se pudo crear la cuenta del colaborador (clave de 6+).' };
-  try { await rpc('calf_unir_colab', { p_codigo: codigo, p_usuario: usuario }); }
+  if (!sess) { await signUp(email, password); sess = await signIn(email, password); }
+  if (!sess) return { ok: false, msg: 'No se pudo crear la cuenta del colaborador (la clave debe tener 6+ caracteres).' };
+  // La contrasena viaja tambien al unir: ahora la comprueba la funcion del
+  // servidor. Sin esto, cualquiera con el codigo de la licencia (que va adentro
+  // del QR) podia anotarse como colaborador de un local ajeno y leerle -y
+  // pisarle- todos los datos.
+  try { await rpc('calf_unir_colab', { p_codigo: codigo, p_usuario: usuario, p_pass: password }); }
   catch (e: any) { return { ok: false, msg: 'No se pudo unir: ' + (e.message || e) }; }
   return { ok: true };
+}
+
+/** Da de baja el acceso de un colaborador: le saca la MEMBRESIA, no solo el
+ *  usuario del listado. */
+export async function calfBajaColab(codigo: string, usuario: string): Promise<boolean> {
+  if (!codigo || !usuario) return false;
+  try { const r = await rpc('calf_baja_colab', { p_codigo: codigo, p_usuario: usuario }); return !!(r && r.ok); }
+  catch (e) { return false; }
 }
 
 export async function miMembresia(): Promise<{ tenant_id: string; rol: string; usuario: string } | null> {
@@ -105,23 +178,80 @@ export async function miMembresia(): Promise<{ tenant_id: string; rol: string; u
   } catch (e) { return null; }
 }
 
+/**
+ * Baja los datos del local.
+ *
+ * `null` = NO SE PUDO LEER (sin sesion, sin senal, permiso denegado).
+ * `{}`   = se leyo bien y esta GENUINAMENTE vacio (licencia nueva).
+ *
+ * OJO, que aca estuvo el problema que en Boutique borro un catalogo entero:
+ * antes, sin sesion, la consulta salia igual con la clave ANONIMA. La regla de
+ * seguridad respondia `[]` con status 200 y esto devolvia `{}`. La app lo tomaba
+ * como "local vacio" y el autoguardado subia ese vacio. Ahora sin sesion no se
+ * pregunta, y cero filas se confirma contra calfVersion (que se lee sin permisos):
+ * si hay fecha, la fila EXISTE y lo que fallo fue el permiso.
+ */
 export async function cloudLoad(codigo: string): Promise<CloudData | null> {
-  const bearer = (await authToken()) || SB_KEY;
+  diag.ultimoIntento = Date.now();
+  let bearer = await authToken();
+  if (!bearer) { await refresh(); bearer = await authToken(); }
+  diag.tokenVivo = !!bearer;
+  if (!bearer) { diag.ultimoError = 'sin sesion'; return null; }
   try {
-    const res = await fetch(`${SB_URL}/rest/v1/calf_backups?tenant_id=eq.${encodeURIComponent(codigo)}&select=datos&limit=1`, { cache: 'no-store', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + bearer } });
-    if (!res.ok) return null;
+    const res = await fetch(
+      `${SB_URL}/rest/v1/calf_backups?tenant_id=eq.${encodeURIComponent(codigo)}&select=datos&limit=1`,
+      { cache: 'no-store', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + bearer } });
+    if (!res.ok) { diag.ultimoError = 'HTTP ' + res.status; return null; }
     const rows = await res.json();
-    return (rows && rows.length && rows[0].datos) ? rows[0].datos as CloudData : {};
-  } catch (e) { return null; }
+    if (!Array.isArray(rows)) { diag.ultimoError = 'respuesta rara'; return null; }
+
+    if (!rows.length) {
+      let v = '';
+      try { v = await calfVersion(codigo); } catch (e) { v = ''; }
+      if (v && v !== '__unknown__') { diag.ultimoError = 'sin permiso sobre este local'; return null; }
+      diag.ultimaLectura = Date.now(); diag.ultimoError = '';
+      return {};
+    }
+
+    diag.ultimaLectura = Date.now(); diag.ultimoError = '';
+    return (rows[0].datos || {}) as CloudData;
+  } catch (e) { diag.ultimoError = 'sin conexion'; return null; }
 }
 
+/** Ultimos datos del sondeo, para poder ver que pasa sin adivinar. */
+export const diag = {
+  ultimaLectura: 0 as number,
+  ultimoIntento: 0 as number,
+  ultimoError: '' as string,
+  tokenVivo: false as boolean,
+};
+
+/** La sesion de nube sigue viva? */
+export async function sesionViva(): Promise<boolean> { return !!(await authToken()); }
+
 export async function cloudSave(codigo: string, datos: CloudData): Promise<boolean> {
-  const body = JSON.stringify({ tenant_id: codigo, datos, updated_at: new Date().toISOString() });
-  const enviar = async (tok: string) => fetch(`${SB_URL}/rest/v1/calf_backups`, { method: 'POST', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }, body });
+  // Sin sesion NO se guarda: con la clave anonima la regla de seguridad
+  // rechaza siempre, y ese "guardado" que fallaba en silencio hacia creer que
+  // los cambios estaban subidos cuando no habia subido nada.
+  let bearer = await authToken();
+  if (!bearer) { await refresh(); bearer = await authToken(); }
+  if (!bearer) return false;
+  const enviar = async (tok: string) => fetch(`${SB_URL}/rest/v1/calf_backups`, {
+    method: 'POST',
+    headers: {
+      apikey: SB_KEY, Authorization: 'Bearer ' + tok,
+      'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ tenant_id: codigo, datos, updated_at: new Date().toISOString() }),
+  });
   try {
-    const tok = (await authToken()) || SB_KEY;
-    let res = await enviar(tok);
-    if (res.status === 401 || res.status === 403) { const ns = await refresh(); if (ns && ns.access_token) res = await enviar(ns.access_token); }
+    let res = await enviar(bearer);
+    // Token vencido (401/403): refrescamos la sesion y reintentamos una vez,
+    // asi un guardado no se pierde en silencio.
+    if (res.status === 401 || res.status === 403) {
+      const ns = await refresh();
+      if (ns && ns.access_token) res = await enviar(ns.access_token);
+    }
     return res.ok;
   } catch (e) { return false; }
 }
