@@ -118,6 +118,10 @@ export default function App() {
     const r = role === 'admin' ? await cloud.asegurarCuentaSeguraDueno(user.trim(), pass, c) : await cloud.asegurarCuentaSeguraColab(user.trim(), pass, c);
     if (!r.ok) return r;
     const remote = await cloud.cloudLoad(c);
+    // `null` = NO SE PUDO LEER la nube. OJO: si seguiamos, el "arranque limpio"
+    // de mas abajo dejaba la tienda vacia y el autoguardado subia ese vacio.
+    // Asi se borra un catalogo entero. Cortamos y que lo intente de nuevo.
+    if (remote === null) return { ok: false, msg: 'No se pudo leer tu tienda (sin senal o sesion vencida). Probá de nuevo en un momento.' };
     const tiene = !!(remote && (remote.tenant || (remote.products && remote.products.length)));
     if (tiene) hydrateFromCloud(c, remote as cloud.CloudData);
     else if (role === 'admin') cleanStart(c, lic);
@@ -198,6 +202,9 @@ export default function App() {
       try {
         const unir = (loc: any[], rem: any[]) => { const m = new Map<string, any>(); (rem || []).forEach(x => { if (x && x.id) m.set(x.id, x); }); (loc || []).forEach(x => { if (x && x.id) m.set(x.id, x); }); return Array.from(m.values()); };
         const remote = await cloud.cloudLoad(code);
+        // Si NO se pudo leer la nube, no guardamos: sin lo de la nube en la
+        // mano, el candado anti-borrado de mas abajo no puede hacer su trabajo.
+        if (remote === null) return;
         const tOrders = db.orders.filter(o => o.tenantId === code);
         const tComments = db.comments.filter(c => c.tenantId === code);
         const mergedOrders = unir(tOrders, (remote && remote.orders) || []);
@@ -237,11 +244,15 @@ export default function App() {
     let lastVer = ''; let stop = false;
     const unir = (loc: any[], rem: any[]) => { const m = new Map<string, any>(); (rem || []).forEach(x => { if (x && x.id) m.set(x.id, x); }); (loc || []).forEach(x => { if (x && x.id) m.set(x.id, x); }); return Array.from(m.values()); };
     const traer = async () => {
+      await cloud.mantenerSesionViva();
       const ver = await cloud.calfVersion(code);
       if (stop || !ver || ver === lastVer) return;
-      lastVer = ver;
       const remote = await cloud.cloudLoad(code);
-      if (!remote) return;
+      if (!remote || stop) return;
+      // La version se guarda RECIEN ACA, con los datos ya en la mano. Antes se
+      // guardaba primero: si la bajada fallaba, el panel creia que ya tenia lo
+      // ultimo y se quedaba clavado en silencio hasta recargar a mano.
+      lastVer = ver;
       setDb(prev => {
         const others = prev.orders.filter(o => o.tenantId !== code);
         const otherC = prev.comments.filter(c => c.tenantId !== code);
@@ -250,6 +261,7 @@ export default function App() {
         return { ...prev, orders: [...mo, ...others], comments: [...mc, ...otherC] };
       });
     };
+    traer(); // primera pasada al abrir el panel, sin esperar los 12 segundos
     const iv = setInterval(traer, 12000);
     let ultimo = 0;
     const thr = () => { const n = Date.now(); if (n - ultimo < 4000) return; ultimo = n; traer(); };
@@ -478,10 +490,17 @@ export default function App() {
   };
 
   const handleDeleteCollaborator = (id: string) => {
+    // Antes solo salia del listado: su cuenta y su permiso en la nube seguian
+    // vivos, asi que desde el celular donde ya habia entrado seguia leyendo y
+    // escribiendo los pedidos del local. Ahora le sacamos tambien el permiso.
+    const fuera: any = db.collaborators.find(c => c.id === id);
     setDb(prev => ({
       ...prev,
       collaborators: prev.collaborators.filter(c => c.id !== id)
     }));
+    if (fuera && fuera.username && cloudCodeRef.current) {
+      cloud.calfBajaColab(cloudCodeRef.current, fuera.username).catch(() => {});
+    }
   };
 
   const handleUpdateComment = (updated: Comment) => {
